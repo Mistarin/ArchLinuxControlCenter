@@ -5,6 +5,8 @@
 [![Python](https://img.shields.io/badge/Python-3.10+-3776AB?style=flat&logo=python&logoColor=white)](https://python.org)
 [![PyQt6](https://img.shields.io/badge/GUI-PyQt6-41CD52?style=flat&logo=qt&logoColor=white)](https://riverbankcomputing.com/software/pyqt/)
 
+<img width="2560" height="1440" alt="Snímek obrazovky_20260821_015737" src="https://github.com/user-attachments/assets/74e2d8d2-55bd-4436-8be3-bb85ec0913c1" />
+
 A minimalist, high-performance personal GUI cockpit for **CachyOS / Arch Linux**.
 
 ## Features
