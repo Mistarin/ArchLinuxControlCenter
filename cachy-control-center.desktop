@@ -1,0 +1,8 @@
+[Desktop Entry]
+Name=CachyOS Control Center
+Comment=Personal GUI Cockpit for CachyOS and Arch Linux
+Exec=/usr/bin/python3 /home/martin/Main/Programming/CachyOsControlCenter/main.py
+Icon=utilities-system-monitor
+Terminal=false
+Type=Application
+Categories=System;Settings;Utility;
