@@ -21,12 +21,15 @@ from cachy_control.ui.components.dependency_button import DependencyButton
 from cachy_control.ui.components.stat_gauge import StatGauge
 from cachy_control.ui.components.section_badge import SectionBadge
 from cachy_control.ui.theme import THEMES
+from cachy_control.ui.components.task_worker import TaskWorker
 
 class DashboardView(QWidget):
     def __init__(self, parent: QWidget = None):
         super().__init__(parent)
         self.services = ServiceRegistry.get()
         self._is_server_running = False
+        self._metrics_worker = None
+        self._java_worker = None
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(24, 20, 24, 20)
@@ -34,7 +37,7 @@ class DashboardView(QWidget):
 
         # Header Row
         header = QHBoxLayout()
-        header.addWidget(SectionBadge("dashboard", "SYSTEM OVERVIEW & COCKPIT"))
+        header.addWidget(SectionBadge("dashboard", "SYSTEM OVERVIEW"))
         header.addStretch()
         self.refresh_btn = SharpButton("Refresh", icon_name="refresh", variant="outline")
         self.refresh_btn.clicked.connect(self._refresh_all)
@@ -217,7 +220,7 @@ class DashboardView(QWidget):
         j_row = QHBoxLayout()
         j_row.addWidget(QLabel("Default Java Environment:"))
         self.java_combo = QComboBox()
-        self._populate_java_versions()
+        QTimer.singleShot(0, self._populate_java_versions)
         j_row.addWidget(self.java_combo, 1)
 
         self.set_java_btn = SharpButton("Apply Java Default", icon_name="check", variant="primary")
@@ -254,7 +257,7 @@ class DashboardView(QWidget):
         self.timer = QTimer(self)
         self.timer.timeout.connect(self._poll_metrics)
         metrics_interval_ms = self.services.settings.get("metrics_poll_interval_ms", 5000)
-        self.timer.start(max(1000, int(metrics_interval_ms)))
+        self._metrics_interval_ms = max(1000, int(metrics_interval_ms))
 
         self._on_dir_changed()
         self._switch_sub_tab("metrics")
@@ -280,10 +283,31 @@ class DashboardView(QWidget):
         self.fastfetch_btn.refresh_state()
 
     def _poll_metrics(self):
-        metrics = self.services.system.get_metrics()
+        if self._metrics_worker and self._metrics_worker.isRunning():
+            return
+        self._metrics_worker = TaskWorker(self.services.system.get_metrics, self)
+        self._metrics_worker.result_ready.connect(self._display_metrics)
+        self._metrics_worker.failed.connect(self._metrics_failed)
+        self._metrics_worker.start()
+
+    def _display_metrics(self, metrics):
+        self._metrics_worker = None
         self.cpu_gauge.set_value(metrics.cpu_percent, f"{metrics.cpu_percent:.1f}% ({metrics.cpu_cores} Cores)")
         self.ram_gauge.set_value(metrics.ram_percent, f"{metrics.ram_used_gb:.1f} / {metrics.ram_total_gb:.1f} GB")
         self.swap_gauge.set_value(metrics.swap_percent, f"{metrics.swap_used_gb:.1f} / {metrics.swap_total_gb:.1f} GB")
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self._poll_metrics()
+        self.timer.start(self._metrics_interval_ms)
+
+    def hideEvent(self, event):
+        self.timer.stop()
+        super().hideEvent(event)
+
+    def _metrics_failed(self, message: str):
+        self._metrics_worker = None
+        self.services.runner.log(f"System metrics unavailable: {message}")
 
     def _browse_srv_dir(self):
         current = self.srv_dir_input.text().strip()
@@ -377,14 +401,22 @@ class DashboardView(QWidget):
     def _open_project_folder(self):
         directory = self.srv_dir_input.text().strip()
         if os.path.isdir(directory):
-            safe_dir = shlex.quote(directory)
-            self.services.runner.run_command(f"dolphin {safe_dir} 2>/dev/null || xdg-open {safe_dir} &")
+            viewer = "dolphin" if shutil.which("dolphin") else "xdg-open"
+            self.services.runner.launch_detached([viewer, directory])
 
     def _populate_java_versions(self):
-        raw_lines = self.services.system.get_java_versions()
+        if self._java_worker and self._java_worker.isRunning():
+            return
+        self._java_worker = TaskWorker(self.services.system.get_java_versions, self)
+        self._java_worker.result_ready.connect(self._display_java_versions)
+        self._java_worker.failed.connect(self._java_versions_failed)
+        self._java_worker.start()
+
+    def _display_java_versions(self, raw_lines):
+        self._java_worker = None
         self.java_combo.clear()
         for line in raw_lines:
-            if "Available" in line or "detected" in line or "Error" in line:
+            if "Available" in line or "detected" in line or "Error" in line or "not installed" in line:
                 continue
             clean = line.replace("(default)", "").strip()
             if clean:
@@ -392,11 +424,16 @@ class DashboardView(QWidget):
         if self.java_combo.count() == 0:
             self.java_combo.addItem("Default System JVM", "default")
 
+    def _java_versions_failed(self, message: str):
+        self._java_worker = None
+        self.java_combo.clear()
+        self.java_combo.addItem("Default System JVM", "default")
+        self.services.runner.log(f"Could not read Java versions: {message}")
+
     def _apply_java(self):
         env_name = self.java_combo.currentData()
         if env_name and env_name != "default":
-            cmd = f"sudo archlinux-java set {env_name}"
-            self.services.runner.run_command(cmd)
+            self.services.runner.run_argv(["sudo", "archlinux-java", "set", env_name])
 
     def _schedule_shutdown(self):
         mins = self.shutdown_spin.value()

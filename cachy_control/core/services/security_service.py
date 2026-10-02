@@ -7,7 +7,7 @@ import shlex
 class SecurityService:
     def get_audit_watch_command(self, target: str) -> str:
         safe_target = shlex.quote(target.strip())
-        return f"sudo auditctl -w {safe_target} -p rwxa -k cachy_watch && sudo auditctl -l && echo 'Audit watch rule active for {safe_target}'"
+        return f"sudo auditctl -w {safe_target} -p rwxa -k cachy_watch && sudo auditctl -l && echo 'Audit watch rule added.'"
 
     def get_audit_search_command(self, target: str) -> str:
         safe_target = shlex.quote(target.strip())

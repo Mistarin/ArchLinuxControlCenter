@@ -19,11 +19,13 @@ from cachy_control.ui.components.dependency_button import DependencyButton
 from cachy_control.ui.components.section_badge import SectionBadge
 from cachy_control.ui.components.confirm_dialog import confirm_destructive_action
 from cachy_control.ui.theme import THEMES, DESTRUCTIVE_RED
+from cachy_control.ui.components.task_worker import TaskWorker
 
 class GamingToolsView(QWidget):
     def __init__(self, parent: QWidget = None):
         super().__init__(parent)
         self.services = ServiceRegistry.get()
+        self._process_worker = None
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(24, 20, 24, 20)
@@ -42,7 +44,7 @@ class GamingToolsView(QWidget):
         self.subtab_configs = [
             ("umu", "UMU Proton Runner", "play"),
             ("minecraft", "Minecraft Server", "terminal"),
-            ("kill", "Process Killer Doctor", "stop"),
+            ("kill", "Process Management", "stop"),
             ("all", "Show All", "sliders"),
         ]
         self.subtab_buttons = {}
@@ -119,7 +121,7 @@ class GamingToolsView(QWidget):
         self.c_layout.addWidget(self.mc_card)
 
         # 3. Process Killer Doctor Card
-        self.kill_card = SharpCard("Process Killer Doctor", "Search and kill unresponsive game instances or rogue background processes")
+        self.kill_card = SharpCard("Running Processes", "Find a process and stop it if needed")
         k_layout = QVBoxLayout()
         k_layout.setSpacing(10)
 
@@ -127,11 +129,15 @@ class GamingToolsView(QWidget):
         f_row.setSpacing(8)
         self.filter_input = QLineEdit()
         self.filter_input.setPlaceholderText("Filter processes by name (e.g. wine, steam, java, discord)...")
-        self.filter_input.textChanged.connect(self._refresh_processes)
+        self.process_filter_timer = QTimer(self)
+        self.process_filter_timer.setSingleShot(True)
+        self.process_filter_timer.setInterval(250)
+        self.process_filter_timer.timeout.connect(self._refresh_processes)
+        self.filter_input.textChanged.connect(lambda: self.process_filter_timer.start())
         f_row.addWidget(self.filter_input, 1)
 
         self.refresh_proc_btn = SharpButton("Refresh Processes", icon_name="refresh", variant="outline")
-        self.refresh_proc_btn.clicked.connect(self._refresh_processes)
+        self.refresh_proc_btn.clicked.connect(lambda: self.process_filter_timer.start(0))
         f_row.addWidget(self.refresh_proc_btn)
         k_layout.addLayout(f_row)
 
@@ -188,7 +194,7 @@ class GamingToolsView(QWidget):
             w_title = QLabel("UMU Launcher is not installed")
             w_title.setStyleSheet(f"font-weight: 700; color: {DESTRUCTIVE_RED}; font-size: 12px;")
             w_desc = QLabel("UMU is required to launch Windows executables with proton/wine compatibility wrappers outside Steam.")
-            w_desc.setStyleSheet("font-size: 11px; opacity: 0.85;")
+            w_desc.setStyleSheet("font-size: 11px;")
             
             inst_btn = SharpButton("Install UMU (AUR: umu-launcher)", icon_name="download", variant="primary")
             inst_btn.clicked.connect(self._install_umu)
@@ -254,7 +260,8 @@ class GamingToolsView(QWidget):
 
     def _open_mc_dir(self):
         server_dir = self.mc_path_input.text().strip()
-        self.services.runner.run_command(f"dolphin '{server_dir}' &")
+        viewer = "dolphin" if shutil.which("dolphin") else "xdg-open"
+        self.services.runner.launch_detached([viewer, server_dir])
 
     def _install_umu(self):
         cmd = self.services.gaming.get_umu_install_command()
@@ -270,7 +277,26 @@ class GamingToolsView(QWidget):
 
     def _refresh_processes(self):
         query = self.filter_input.text().strip()
-        procs = self.services.gaming.get_running_processes(query)
+        if self._process_worker and self._process_worker.isRunning():
+            return
+        self.refresh_proc_btn.setEnabled(False)
+        self._process_worker = TaskWorker(lambda: (query, self.services.gaming.get_running_processes(query)), self)
+        self._process_worker.result_ready.connect(self._display_processes)
+        self._process_worker.failed.connect(lambda message: self._process_refresh_failed(message))
+        self._process_worker.start()
+
+    def _process_refresh_failed(self, message: str):
+        self._process_worker = None
+        self.refresh_proc_btn.setEnabled(True)
+        self.services.runner.log(f"Could not read running processes: {message}")
+
+    def _display_processes(self, result):
+        self._process_worker = None
+        query, procs = result
+        self.refresh_proc_btn.setEnabled(True)
+        if query != self.filter_input.text().strip():
+            self.process_filter_timer.start(0)
+            return
         if not procs:
             self.kill_table.setRowCount(1)
             empty_item = QTableWidgetItem("No processes found matching filter.")

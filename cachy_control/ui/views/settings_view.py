@@ -5,6 +5,7 @@ Equipped with top sub-module tabs for focused organization.
 """
 
 from pathlib import Path
+import shutil
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QSpinBox,
     QScrollArea, QFrame, QGridLayout, QApplication, QPushButton
@@ -162,7 +163,7 @@ class SettingsView(QWidget):
         m_box = QVBoxLayout()
         m_box.setSpacing(4)
         m_title = QLabel("Application Menu Status:")
-        m_title.setStyleSheet("font-size: 12px; opacity: 0.85; font-weight: 600;")
+        m_title.setStyleSheet("font-size: 12px; font-weight: 600;")
         self.app_menu_status_lbl = QLabel("Checking...")
         self.app_menu_status_lbl.setStyleSheet("font-size: 13px; font-weight: 700; ")
         m_box.addWidget(m_title)
@@ -172,7 +173,7 @@ class SettingsView(QWidget):
         a_box = QVBoxLayout()
         a_box.setSpacing(4)
         a_title = QLabel("Run on Startup Status:")
-        a_title.setStyleSheet("font-size: 12px; opacity: 0.85; font-weight: 600;")
+        a_title.setStyleSheet("font-size: 12px; font-weight: 600;")
         self.autostart_status_lbl = QLabel("Checking...")
         self.autostart_status_lbl.setStyleSheet("font-size: 13px; font-weight: 700; ")
         a_box.addWidget(a_title)
@@ -184,7 +185,7 @@ class SettingsView(QWidget):
         btn_grid = QHBoxLayout()
         btn_grid.setSpacing(10)
 
-        self.both_btn = SharpButton("Add Once to Startup & App Menu (Both)", icon_name="check", variant="primary")
+        self.both_btn = SharpButton("Enable Startup and Add to App Menu", icon_name="check", variant="primary")
         self.both_btn.clicked.connect(self._add_both)
         btn_grid.addWidget(self.both_btn)
 
@@ -203,7 +204,7 @@ class SettingsView(QWidget):
         self.c_layout.addWidget(self.integration_card)
 
         # 3. AppImage & Packaging Card
-        self.pkg_card = SharpCard("AppImage & Packaging", "Standalone AppImage bundle generation inside ./packaging")
+        self.pkg_card = SharpCard("AppImage Packaging", "Build with the system appimagetool; the result uses the target system's Python and Qt packages")
         p_layout = QVBoxLayout()
         p_layout.setSpacing(12)
 
@@ -222,11 +223,11 @@ class SettingsView(QWidget):
 
         info_text = QVBoxLayout()
         info_text.setSpacing(4)
-        name_lbl = QLabel("CachyOS Control Center AppImage Bundle")
+        name_lbl = QLabel("CachyOS Control Center AppImage")
         name_lbl.setStyleSheet("font-size: 13px; font-weight: 700;")
-        desc_lbl = QLabel("Builds a portable, single-file executable package with bundled desktop metadata and hicolor icons.")
+        desc_lbl = QLabel("Creates a single-file launcher package. The target system must provide Python 3, PyQt6, and psutil.")
         desc_lbl.setWordWrap(True)
-        desc_lbl.setStyleSheet("font-size: 11px; opacity: 0.85;")
+        desc_lbl.setStyleSheet("font-size: 11px;")
         info_text.addWidget(name_lbl)
         info_text.addWidget(desc_lbl)
         info_row.addLayout(info_text, 1)
@@ -236,7 +237,7 @@ class SettingsView(QWidget):
         pkg_btn_row = QHBoxLayout()
         pkg_btn_row.setSpacing(10)
 
-        self.build_appimage_btn = SharpButton("Build Standalone AppImage", icon_name="package", variant="primary")
+        self.build_appimage_btn = SharpButton("Build AppImage", icon_name="package", variant="primary")
         self.build_appimage_btn.clicked.connect(self._build_appimage)
         pkg_btn_row.addWidget(self.build_appimage_btn)
 
@@ -296,27 +297,28 @@ class SettingsView(QWidget):
     def _refresh_status(self):
         is_menu = self.services.system.is_app_menu_installed()
         is_auto = self.services.system.is_autostart_enabled()
+        theme = THEMES.get(self.services.settings.get("theme", "light"), THEMES["light"])
 
         if is_menu:
             self.app_menu_status_lbl.setText("✓ Registered in App Menu")
-            self.app_menu_status_lbl.setStyleSheet("color: #059669; font-weight: 700;")
+            self.app_menu_status_lbl.setStyleSheet(f"color: {theme['success']}; font-weight: 700;")
             self.add_menu_btn.set_clean_text("Remove from Menu")
             self.add_menu_btn.variant = "danger"
         else:
             self.app_menu_status_lbl.setText("Not Registered")
-            self.app_menu_status_lbl.setStyleSheet("opacity: 0.7; font-weight: 600;")
+            self.app_menu_status_lbl.setStyleSheet(f"color: {theme['muted']}; font-weight: 600;")
             self.add_menu_btn.set_clean_text("Add to App Menu")
             self.add_menu_btn.variant = "secondary"
         self.add_menu_btn.apply_style()
 
         if is_auto:
             self.autostart_status_lbl.setText("✓ Enabled (Starts on Login)")
-            self.autostart_status_lbl.setStyleSheet("color: #059669; font-weight: 700;")
+            self.autostart_status_lbl.setStyleSheet(f"color: {theme['success']}; font-weight: 700;")
             self.toggle_auto_btn.set_clean_text("Disable Autostart")
             self.toggle_auto_btn.variant = "danger"
         else:
             self.autostart_status_lbl.setText("Disabled")
-            self.autostart_status_lbl.setStyleSheet("opacity: 0.7; font-weight: 600;")
+            self.autostart_status_lbl.setStyleSheet(f"color: {theme['muted']}; font-weight: 600;")
             self.toggle_auto_btn.set_clean_text("Enable Autostart")
             self.toggle_auto_btn.variant = "secondary"
         self.toggle_auto_btn.apply_style()
@@ -326,7 +328,7 @@ class SettingsView(QWidget):
             self.both_btn.set_clean_text("✓ Fully Integrated")
         else:
             self.both_btn.setEnabled(True)
-            self.both_btn.set_clean_text("Add Once to Startup & App Menu (Both)")
+            self.both_btn.set_clean_text("Enable Startup and Add to App Menu")
         self.both_btn.apply_style()
 
     def _add_both(self):
@@ -350,8 +352,9 @@ class SettingsView(QWidget):
 
     def _build_appimage(self):
         script = str(Path(__file__).parent.parent.parent.parent / "packaging" / "build_appimage.sh")
-        self.services.runner.run_command(f"bash '{script}'")
+        self.services.runner.run_argv(["bash", script])
 
     def _open_packaging_folder(self):
         pkg_dir = str(Path(__file__).parent.parent.parent.parent / "packaging")
-        self.services.runner.run_command(f"dolphin '{pkg_dir}' &")
+        viewer = "dolphin" if shutil.which("dolphin") else "xdg-open"
+        self.services.runner.launch_detached([viewer, pkg_dir])

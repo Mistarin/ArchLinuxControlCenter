@@ -3,6 +3,7 @@ Network Diagnostics, Open Ports & Virsh/Libvirt VM Networks.
 Equipped with top sub-module tabs and unclipped ports table.
 """
 
+import psutil
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QTableWidget,
     QTableWidgetItem, QHeaderView, QScrollArea, QLineEdit
@@ -14,12 +15,15 @@ from cachy_control.ui.components.sharp_card import SharpCard
 from cachy_control.ui.components.sharp_button import SharpButton
 from cachy_control.ui.components.dependency_button import DependencyButton
 from cachy_control.ui.components.section_badge import SectionBadge
+from cachy_control.ui.components.confirm_dialog import confirm_destructive_action
+from cachy_control.ui.components.task_worker import TaskWorker
 from cachy_control.ui.theme import THEMES
 
 class NetworkVmView(QWidget):
     def __init__(self, parent: QWidget = None):
         super().__init__(parent)
         self.services = ServiceRegistry.get()
+        self._ports_worker = None
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(24, 20, 24, 20)
@@ -104,11 +108,11 @@ class NetworkVmView(QWidget):
         ip_row = QHBoxLayout()
         ip_row.setSpacing(10)
 
-        self.ext_ip_btn = SharpButton("Check Public IP (curl ifconfig.me)", icon_name="globe", variant="primary")
+        self.ext_ip_btn = SharpButton("Check Public IP", icon_name="globe", variant="primary")
         self.ext_ip_btn.clicked.connect(self._check_public_ip)
         ip_row.addWidget(self.ext_ip_btn)
 
-        self.ping_btn = SharpButton("Ping Gateway & Cloudflare (1.1.1.1)", icon_name="sliders", variant="secondary")
+        self.ping_btn = SharpButton("Ping Cloudflare (1.1.1.1)", icon_name="sliders", variant="secondary")
         self.ping_btn.clicked.connect(self._ping_check)
         ip_row.addWidget(self.ping_btn)
 
@@ -143,10 +147,22 @@ class NetworkVmView(QWidget):
 
     def _refresh_all(self):
         self.start_net_btn.refresh_state()
-        self._render_ports()
+        if self._ports_worker and self._ports_worker.isRunning():
+            return
+        self.refresh_btn.setEnabled(False)
+        self._ports_worker = TaskWorker(self.services.vm.get_listening_ports, self)
+        self._ports_worker.result_ready.connect(self._render_ports)
+        self._ports_worker.failed.connect(self._ports_refresh_failed)
+        self._ports_worker.start()
 
-    def _render_ports(self):
-        ports = self.services.vm.get_listening_ports()
+    def _ports_refresh_failed(self, message: str):
+        self._ports_worker = None
+        self.refresh_btn.setEnabled(True)
+        self.services.runner.log(f"Could not read listening ports: {message}")
+
+    def _render_ports(self, ports):
+        self._ports_worker = None
+        self.refresh_btn.setEnabled(True)
         self.ports_table.setRowCount(len(ports))
 
         for row, p in enumerate(ports):
@@ -164,9 +180,9 @@ class NetworkVmView(QWidget):
             act_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
             if p.process != "-":
-                btn = SharpButton("Kill Sockets", icon_name="trash", variant="danger")
+                btn = SharpButton("Stop Process", icon_name="stop", variant="danger")
                 btn.setFixedHeight(28)
-                btn.clicked.connect(lambda _, proc=p.process: self._kill_port_process(proc))
+                btn.clicked.connect(lambda _, pid=p.pid, proc=p.process: self._kill_port_process(pid, proc))
                 act_layout.addWidget(btn)
 
             self.ports_table.setCellWidget(row, 3, act_container)
@@ -179,8 +195,31 @@ class NetworkVmView(QWidget):
         cmd = self.services.vm.get_virsh_define_default_command()
         self.services.runner.run_command(cmd)
 
-    def _kill_port_process(self, process_name: str):
-        self.services.runner.run_command(f"sudo killall -9 '{process_name}'", on_finish=lambda _: self._render_ports())
+    def _kill_port_process(self, pid: str, process_name: str):
+        if not str(pid).isdigit():
+            self.services.runner.log("Could not identify a process ID for this socket.")
+            return
+        try:
+            current_name = psutil.Process(int(pid)).name()
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            self.services.runner.log("That process is no longer available. Refresh the port list and try again.")
+            self._refresh_all()
+            return
+        if current_name != process_name:
+            self.services.runner.log("That process ID now belongs to a different process. Refresh the port list and try again.")
+            self._refresh_all()
+            return
+        if not confirm_destructive_action(
+            self,
+            f"Stop {process_name} (PID {pid})",
+            "Send a normal termination signal to this process? Other processes with the same name will not be affected.",
+            "Stop Process",
+        ):
+            return
+        self.services.runner.run_argv(
+            ["sudo", "kill", "-TERM", str(pid)],
+            on_finish=lambda _: self._refresh_all(),
+        )
 
     def _check_public_ip(self):
         self.services.runner.run_command("echo -n 'Public IP: ' && curl -s ifconfig.me && echo ''")

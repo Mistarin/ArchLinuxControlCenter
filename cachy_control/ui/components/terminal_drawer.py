@@ -21,7 +21,7 @@ class InteractiveTerminalInput(QLineEdit):
         self.on_submit = on_submit
         self.history = []
         self.history_index = -1
-        self.setPlaceholderText("Type command / stdin here and press Enter (e.g. y, sudo pacman -Syu)...")
+        self.setPlaceholderText("Enter a command or reply to the running process, then press Enter")
         self.returnPressed.connect(self._handle_enter)
 
     def keyPressEvent(self, event: QKeyEvent):
@@ -66,7 +66,9 @@ class TerminalDrawer(QFrame):
         header.setSpacing(10)
 
         self.status_dot = QLabel("●")
-        self.status_dot.setStyleSheet("color: #10B981; font-size: 14px;")
+        theme_key = self.services.settings.get("theme", "light")
+        theme = THEMES.get(theme_key, THEMES["light"])
+        self.status_dot.setStyleSheet(f"color: {theme['success']}; font-size: 14px;")
         header.addWidget(self.status_dot)
 
         self.title_label = QLabel("LIVE EXECUTION TERMINAL")

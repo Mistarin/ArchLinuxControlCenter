@@ -14,11 +14,14 @@ from cachy_control.ui.components.sharp_card import SharpCard
 from cachy_control.ui.components.sharp_button import SharpButton
 from cachy_control.ui.components.section_badge import SectionBadge
 from cachy_control.ui.theme import THEMES
+from cachy_control.ui.components.task_worker import TaskWorker
 
 class AudioBtView(QWidget):
     def __init__(self, parent: QWidget = None):
         super().__init__(parent)
         self.services = ServiceRegistry.get()
+        self._refresh_worker = None
+        self.audio_nodes = []
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(24, 20, 24, 20)
@@ -26,7 +29,7 @@ class AudioBtView(QWidget):
 
         # Header Row
         header = QHBoxLayout()
-        header.addWidget(SectionBadge("audio_bt", "AUDIO & BLUETOOTH COCKPIT"))
+        header.addWidget(SectionBadge("audio_bt", "AUDIO & BLUETOOTH"))
         header.addStretch()
         self.refresh_btn = SharpButton("Refresh Devices", icon_name="refresh", variant="outline")
         self.refresh_btn.clicked.connect(self._refresh_all)
@@ -63,7 +66,7 @@ class AudioBtView(QWidget):
         self.c_layout.setSpacing(16)
 
         # 1. Bluetooth Actions Bar
-        self.bt_ctrl_card = SharpCard("Bluetooth Operations & Service", "Quick power toggles, daemon restarts and auto-connect service")
+        self.bt_ctrl_card = SharpCard("Bluetooth Controls", "Restart the Bluetooth service, scan for devices, or power Bluetooth on at login")
         b_row = QHBoxLayout()
         b_row.setSpacing(10)
 
@@ -75,7 +78,7 @@ class AudioBtView(QWidget):
         self.scan_on_btn.clicked.connect(self._scan_bt)
         b_row.addWidget(self.scan_on_btn)
 
-        self.autoconnect_btn = SharpButton("Enable User Auto-Connect Service", icon_name="check", variant="outline")
+        self.autoconnect_btn = SharpButton("Start Bluetooth at Login", icon_name="check", variant="outline")
         self.autoconnect_btn.clicked.connect(self._setup_autoconnect)
         b_row.addWidget(self.autoconnect_btn)
 
@@ -100,9 +103,9 @@ class AudioBtView(QWidget):
         self.c_layout.addWidget(self.bt_table_card)
 
         # 3. PipeWire Audio Nodes Table
-        self.audio_card = SharpCard("PipeWire Audio Endpoints (Sinks & Sources)", "Real-time audio devices detected by pactl")
+        self.audio_card = SharpCard("PipeWire Audio Outputs", "Choose the default playback device detected by pactl")
         self.audio_table = QTableWidget(0, 4)
-        self.audio_table.setHorizontalHeaderLabels(["ID", "DEVICE / STREAM NAME", "TYPE", "ACTION"])
+        self.audio_table.setHorizontalHeaderLabels(["ID", "OUTPUT DEVICE", "TYPE", "ACTION"])
         self.audio_table.verticalHeader().setVisible(False)
         self.audio_table.verticalHeader().setDefaultSectionSize(44)
         self.audio_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
@@ -135,11 +138,29 @@ class AudioBtView(QWidget):
         self.audio_card.setVisible(show_all or active_key == "audio")
 
     def _refresh_all(self):
-        self._render_bt_devices()
-        self._render_audio_nodes()
+        if self._refresh_worker and self._refresh_worker.isRunning():
+            return
+        self.refresh_btn.setEnabled(False)
+        self._refresh_worker = TaskWorker(
+            lambda: (self.services.audio_bt.get_bluetooth_devices(), self.services.audio_bt.get_audio_nodes()),
+            self,
+        )
+        self._refresh_worker.result_ready.connect(self._display_refresh)
+        self._refresh_worker.failed.connect(self._refresh_failed)
+        self._refresh_worker.start()
 
-    def _render_bt_devices(self):
-        devices = self.services.audio_bt.get_bluetooth_devices()
+    def _display_refresh(self, result):
+        self._refresh_worker = None
+        self.refresh_btn.setEnabled(True)
+        self._render_bt_devices(result[0])
+        self._render_audio_nodes(result[1])
+
+    def _refresh_failed(self, message: str):
+        self._refresh_worker = None
+        self.refresh_btn.setEnabled(True)
+        self.services.runner.log(f"Could not refresh audio and Bluetooth devices: {message}")
+
+    def _render_bt_devices(self, devices):
         self.bt_table.setRowCount(len(devices))
 
         for row, dev in enumerate(devices):
@@ -169,8 +190,8 @@ class AudioBtView(QWidget):
             act_layout.addWidget(btn)
             self.bt_table.setCellWidget(row, 3, act_container)
 
-    def _render_audio_nodes(self):
-        nodes = self.services.audio_bt.get_audio_nodes()
+    def _render_audio_nodes(self, nodes):
+        self.audio_nodes = nodes
         self.audio_table.setRowCount(len(nodes))
 
         for row, n in enumerate(nodes):
@@ -215,5 +236,8 @@ class AudioBtView(QWidget):
         self.services.runner.run_command(cmd, on_finish=lambda _: self._refresh_all())
 
     def _set_default_audio(self, node_id: int):
-        cmd = self.services.audio_bt.get_set_default_sink_command(node_id)
+        node = next((n for n in self.audio_nodes if n.id == node_id), None)
+        if not node:
+            return
+        cmd = self.services.audio_bt.get_set_default_sink_command(node.name)
         self.services.runner.run_command(cmd, on_finish=lambda _: self._refresh_all())

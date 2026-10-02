@@ -70,12 +70,12 @@ class ShortcutsDialog(QDialog):
         list_layout.setSpacing(8)
 
         shortcuts = [
-            ("Shift + T  /  Ctrl + `  /  F12", "Toggle Live Terminal drawer & focus input"),
+            ("Ctrl + Shift + T  /  Ctrl + `  /  F12", "Show or hide terminal output"),
             ("Q  /  E", "Switch to Previous / Next Sub-Tab in active module"),
             ("Tab  /  Shift + Tab", "Cycle through Next / Previous Main Modules"),
             ("Ctrl + 1 ... Ctrl + 9", "Jump directly to Main Sidebar Module (1 to 9)"),
             ("Ctrl + F  /  /", "Focus Search / Filter box in active module"),
-            ("Esc", "Close terminal drawer / unfocus search input"),
+            ("Esc", "Hide terminal input / unfocus the current field"),
             ("Up / Down Arrows", "Cycle command history in terminal input line"),
             ("F1  /  ?", "Show this Keyboard Shortcuts reference guide"),
         ]

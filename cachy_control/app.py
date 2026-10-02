@@ -3,19 +3,18 @@ Main Application Window for CachyOS Control Center.
 Composes Sidebar Navigation with distinct active item highlight,
 App-Wide Live State & Progress Bar, Permanently Docked Terminal Drawer,
 Bottom-Right Action Notification Toasts, Live Multi-Theme Support,
-and Complete Keyboard Shortcuts (Shift+T, Q/E Sub-Page Navigation, Tab/Shift+Tab Module Cycling, Ctrl+1..9, Ctrl+F, F1).
+and Complete Keyboard Shortcuts (Ctrl+Shift+T, Q/E Sub-Page Navigation, Tab/Shift+Tab Module Cycling, Ctrl+1..9, Ctrl+F, F1).
 """
 
 from pathlib import Path
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QHBoxLayout, QVBoxLayout,
-    QStackedWidget, QPushButton, QLabel, QFrame, QApplication, QDialog,
+    QStackedWidget, QPushButton, QLabel, QFrame, QApplication, QMessageBox,
     QLineEdit, QTextEdit, QPlainTextEdit
 )
 from PyQt6.QtCore import Qt, QSize, QTimer
 from PyQt6.QtGui import QCursor, QFont, QIcon, QResizeEvent, QKeySequence, QShortcut, QKeyEvent
 from cachy_control.core.services.sudo_service import SudoService
-from cachy_control.ui.components.sudo_dialog import SudoAuthDialog
 
 from cachy_control.core.service_registry import ServiceRegistry
 from cachy_control.ui.theme import THEMES, SECTION_COLORS, get_theme_stylesheet
@@ -25,6 +24,7 @@ from cachy_control.ui.components.terminal_drawer import TerminalDrawer
 from cachy_control.ui.components.sharp_button import SharpButton
 from cachy_control.ui.components.notification_toast import NotificationToast
 from cachy_control.ui.components.shortcuts_dialog import ShortcutsDialog
+from cachy_control.ui.components.task_worker import TaskWorker
 
 # Views
 from cachy_control.ui.views.dashboard_view import DashboardView
@@ -83,6 +83,7 @@ class NavButton(QPushButton):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
+        SudoService.cleanup_legacy_credentials()
         self.setWindowTitle("CachyOS Control Center")
         self.resize(1240, 840)
         self.setMinimumSize(1000, 680)
@@ -151,6 +152,9 @@ class MainWindow(QMainWindow):
         self.nav_buttons = []
         self.stack = QStackedWidget()
         self.views_map = {}
+        self.view_classes = {key: view_cls for key, _, _, view_cls in all_nav_items}
+        self._closing_after_workers = False
+        self._close_waiting_worker_ids = set()
 
         # Render Essential Nav Items
         nav_container = QWidget()
@@ -164,9 +168,6 @@ class MainWindow(QMainWindow):
             n_layout.addWidget(btn)
             self.nav_buttons.append(btn)
 
-            view_inst = view_cls()
-            self.stack.addWidget(view_inst)
-            self.views_map[key] = view_inst
 
         # Subtle visual separator line for Advanced Features category
         divider_box = QWidget()
@@ -192,9 +193,6 @@ class MainWindow(QMainWindow):
             n_layout.addWidget(btn)
             self.nav_buttons.append(btn)
 
-            view_inst = view_cls()
-            self.stack.addWidget(view_inst)
-            self.views_map[key] = view_inst
 
         s_layout.addWidget(nav_container)
         s_layout.addStretch()
@@ -204,7 +202,7 @@ class MainWindow(QMainWindow):
         f_layout = QVBoxLayout(footer_box)
         f_layout.setContentsMargins(20, 10, 20, 16)
         self.cachy_badge = QLabel("Arch / CachyOS Linux")
-        self.cachy_badge.setStyleSheet("font-size: 11px; font-weight: 600; opacity: 0.6;")
+        self.cachy_badge.setStyleSheet("font-size: 11px; font-weight: 600;")
         f_layout.addWidget(self.cachy_badge)
         s_layout.addWidget(footer_box)
 
@@ -237,8 +235,8 @@ class MainWindow(QMainWindow):
         self.shortcuts_btn.clicked.connect(self._show_shortcuts_dialog)
         tb_layout.addWidget(self.shortcuts_btn)
 
-        self.terminal_toggle_btn = SharpButton("Terminal Log (Shift+T)", icon_name="terminal", variant="outline")
-        self.terminal_toggle_btn.setToolTip("Toggle Live Terminal drawer (Shift+T / Ctrl+` / F12)")
+        self.terminal_toggle_btn = SharpButton("Terminal Log (Ctrl+Shift+T)", icon_name="terminal", variant="outline")
+        self.terminal_toggle_btn.setToolTip("Toggle terminal output (Ctrl+Shift+T / Ctrl+` / F12)")
         self.terminal_toggle_btn.clicked.connect(self._toggle_terminal)
         tb_layout.addWidget(self.terminal_toggle_btn)
         content_v_layout.addWidget(self.topbar)
@@ -290,12 +288,10 @@ class MainWindow(QMainWindow):
                 break
         self._switch_tab(all_nav_items[initial_idx][0], initial_idx)
 
-        # Check and prompt for Sudo authentication on launch
-        QTimer.singleShot(250, self._prompt_startup_sudo)
 
     def _setup_shortcuts(self):
-        # 1. Terminal toggles: Shift+T, Ctrl+`, F12
-        sc_shift_t = QShortcut(QKeySequence("Shift+T"), self)
+        # Avoid a printable-key shortcut that interferes with uppercase T in text fields.
+        sc_shift_t = QShortcut(QKeySequence("Ctrl+Shift+T"), self)
         sc_shift_t.activated.connect(self._toggle_terminal)
 
         sc_tilde = QShortcut(QKeySequence("Ctrl+`"), self)
@@ -330,7 +326,7 @@ class MainWindow(QMainWindow):
             self.nav_buttons[index].click()
 
     def _cycle_module(self, delta: int):
-        curr = self.stack.currentIndex()
+        curr = next((i for i, button in enumerate(self.nav_buttons) if button.isChecked()), 0)
         next_idx = (curr + delta) % len(self.nav_buttons)
         self.nav_buttons[next_idx].click()
 
@@ -399,12 +395,6 @@ class MainWindow(QMainWindow):
         dlg = ShortcutsDialog(self)
         dlg.exec()
 
-    def _prompt_startup_sudo(self):
-        if not SudoService.is_sudo_cached():
-            dlg = SudoAuthDialog("Grant Administrator Privileges on Launch", is_startup=True, parent=self)
-            if dlg.exec() == QDialog.DialogCode.Accepted:
-                self.state_bar.set_status("Root Session Authenticated", is_loading=False)
-
     def set_theme(self, theme_key: str):
         t = THEMES.get(theme_key, THEMES["light"])
         self.setStyleSheet(get_theme_stylesheet(theme_key))
@@ -450,11 +440,62 @@ class MainWindow(QMainWindow):
 
         if "settings" in self.views_map and hasattr(self.views_map["settings"], "_render_theme_cards"):
             self.views_map["settings"]._render_theme_cards()
+            self.views_map["settings"]._refresh_status()
+
+    def closeEvent(self, event):
+        if self.services.runner.is_running():
+            QMessageBox.warning(
+                self,
+                "Operation in progress",
+                "Stop the running operation from the terminal panel before closing the app.",
+            )
+            event.ignore()
+            return
+        workers = [worker for worker in self.findChildren(TaskWorker) if worker.isRunning()]
+        if workers:
+            event.ignore()
+            if not self._closing_after_workers:
+                self._closing_after_workers = True
+                self.setEnabled(False)
+                self._close_waiting_worker_ids.clear()
+            self._wait_for_workers(workers)
+            return
+        super().closeEvent(event)
+
+    def _wait_for_workers(self, workers):
+        completed_during_setup = False
+        for worker in workers:
+            worker_id = id(worker)
+            if worker_id not in self._close_waiting_worker_ids:
+                self._close_waiting_worker_ids.add(worker_id)
+                worker.finished.connect(self._close_when_workers_finish)
+            if not worker.isRunning():
+                completed_during_setup = True
+        if completed_during_setup:
+            QTimer.singleShot(0, self._close_when_workers_finish)
+
+    def _close_when_workers_finish(self):
+        if not self._closing_after_workers:
+            return
+        workers = [worker for worker in self.findChildren(TaskWorker) if worker.isRunning()]
+        if workers:
+            self._wait_for_workers(workers)
+        else:
+            self._closing_after_workers = False
+            self._close_waiting_worker_ids.clear()
+            self.close()
 
     def _switch_tab(self, key: str, index: int):
+        if key not in self.views_map:
+            view_cls = self.view_classes.get(key)
+            if view_cls is None:
+                return
+            view_inst = view_cls()
+            self.stack.addWidget(view_inst)
+            self.views_map[key] = view_inst
         for btn in self.nav_buttons:
             btn.setChecked(btn.key == key)
-        self.stack.setCurrentIndex(index)
+        self.stack.setCurrentWidget(self.views_map[key])
         cfg = SECTION_COLORS.get(key, {"name": key.title()})
         self.current_section_title.setText(cfg["name"])
         self.services.settings.set("last_tab", key)

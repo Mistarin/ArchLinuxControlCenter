@@ -13,8 +13,10 @@ class GamingService:
         return shutil.which("umu-run") is not None
 
     def get_umu_install_command(self) -> str:
-        aur = "yay" if shutil.which("yay") else ("paru" if shutil.which("paru") else "pacman")
-        return f"{aur} -S --noconfirm umu-launcher"
+        aur = "yay" if shutil.which("yay") else ("paru" if shutil.which("paru") else None)
+        if not aur:
+            return "echo 'Install yay or paru before installing UMU from the AUR.'; exit 127"
+        return f"{aur} -S umu-launcher"
 
     def get_umu_run_command(self, game_executable: str) -> str:
         safe_exe = shlex.quote(game_executable)

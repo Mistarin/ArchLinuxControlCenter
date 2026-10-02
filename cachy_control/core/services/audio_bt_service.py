@@ -5,6 +5,7 @@ Audio & Bluetooth Service.
 import subprocess
 import shutil
 import re
+import shlex
 from typing import List
 from cachy_control.core.contracts.audio_bt_contract import IAudioBtService, BluetoothDevice, AudioNode
 
@@ -67,19 +68,32 @@ class AudioBtService(IAudioBtService):
             pass
         return nodes
 
-    def get_bt_connect_command(self, mac: str) -> str:
+    @staticmethod
+    def _validate_mac(mac: str) -> str:
+        mac = mac.strip()
+        if not re.fullmatch(r"(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}", mac):
+            raise ValueError("Invalid Bluetooth MAC address")
+        return mac
+
+    def get_connect_command(self, mac: str) -> str:
+        mac = self._validate_mac(mac)
         return f"bluetoothctl connect {mac}"
 
-    def get_bt_disconnect_command(self, mac: str) -> str:
+    def get_disconnect_command(self, mac: str) -> str:
+        mac = self._validate_mac(mac)
         return f"bluetoothctl disconnect {mac}"
 
     def get_bt_pair_trust_command(self, mac: str) -> str:
+        mac = self._validate_mac(mac)
         return f"bluetoothctl pair {mac} && bluetoothctl trust {mac} && bluetoothctl connect {mac}"
 
-    def get_bt_restart_command(self) -> str:
+    def get_restart_bluetooth_command(self) -> str:
         return "sudo systemctl restart bluetooth"
 
-    def get_bt_autoconnect_setup_script(self) -> str:
+    def get_scan_command(self) -> str:
+        return "bluetoothctl --timeout 10 scan on"
+
+    def get_autoconnect_command(self) -> str:
         return """mkdir -p ~/.config/systemd/user
 cat << 'SERVICE_EOF' > ~/.config/systemd/user/bluetooth-autoconnect.service
 [Unit]
@@ -99,3 +113,6 @@ systemctl --user daemon-reload
 systemctl --user enable --now bluetooth-autoconnect.service
 echo "Bluetooth auto-connect service enabled!"
 """
+
+    def get_set_default_sink_command(self, sink_name: str) -> str:
+        return f"pactl set-default-sink {shlex.quote(sink_name)}"

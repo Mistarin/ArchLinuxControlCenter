@@ -10,10 +10,10 @@ class CleanupService:
         return "killall dolphin 2>/dev/null; rm -f ~/.config/dolphinrc ~/.local/share/dolphin/view_properties/global/.directory && echo 'Dolphin configuration and local share cache reset successfully.'"
 
     def get_clean_pacman_cache_command(self) -> str:
-        return "sudo paccache -r -k 2 && (yay -Sc --noconfirm 2>/dev/null || paru -Sc --noconfirm 2>/dev/null || true) && echo 'Package cache cleaned.'"
+        return "sudo paccache -r -k 2 && (yay -Sc 2>/dev/null || paru -Sc 2>/dev/null || true) && echo 'Package cache cleaned.'"
 
     def get_clean_flatpak_command(self) -> str:
-        return "flatpak uninstall --unused -y"
+        return "flatpak uninstall --unused"
 
     def get_vacuum_journal_command(self) -> str:
         return "sudo journalctl --vacuum-size=100M"

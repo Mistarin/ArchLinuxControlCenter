@@ -44,28 +44,15 @@ exec /usr/bin/python3 "${HERE}/usr/bin/main.py" "$@"
 APPRUN_EOF
 chmod +x "$APP_DIR/AppRun"
 
-echo "[3/4] Checking appimagetool..."
-APPIMAGETOOL="$SCRIPT_DIR/appimagetool-x86_64.AppImage"
-if [ ! -f "$APPIMAGETOOL" ] && ! command -v appimagetool &> /dev/null; then
-    echo "Downloading appimagetool..."
-    curl -L -o "$APPIMAGETOOL" "https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage" || true
-    if [ -f "$APPIMAGETOOL" ]; then
-        chmod +x "$APPIMAGETOOL"
-    fi
+echo "[3/4] Checking for appimagetool..."
+if ! command -v appimagetool &> /dev/null; then
+    echo "appimagetool is required. Install it from a trusted distribution package or verify its upstream release before use."
+    exit 1
 fi
 
 echo "[4/4] Generating AppImage..."
 export ARCH=x86_64
-if [ -f "$APPIMAGETOOL" ]; then
-    "$APPIMAGETOOL" --appimage-extract-and-run "$APP_DIR" "$OUT_APPIMAGE"
-elif command -v appimagetool &> /dev/null; then
-    appimagetool "$APP_DIR" "$OUT_APPIMAGE"
-else
-    echo "Notice: appimagetool is not available offline or could not be downloaded without network."
-    echo "AppDir structure has been fully generated in $APP_DIR."
-    echo "You can run appimagetool on $APP_DIR to build the final AppImage anytime."
-    exit 0
-fi
+appimagetool "$APP_DIR" "$OUT_APPIMAGE"
 
 echo "=========================================="
 echo " AppImage successfully created:"

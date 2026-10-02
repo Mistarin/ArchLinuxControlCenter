@@ -5,6 +5,7 @@ Allows quick one-click launching of npm, pnpm, yarn, bun, Python, Vite, and cust
 
 import os
 import shutil
+import shlex
 from pathlib import Path
 from typing import Optional, Tuple
 
@@ -74,4 +75,4 @@ class DevServerService:
         else:
             cmd = f"npm run dev"
 
-        return f"cd '{dir_path}' && {cmd}"
+        return f"cd {shlex.quote(dir_path)} && {cmd}"

@@ -7,23 +7,23 @@
 
 <img width="2560" height="1440" alt="Snímek obrazovky_20260821_015737" src="https://github.com/user-attachments/assets/74e2d8d2-55bd-4436-8be3-bb85ec0913c1" />
 
-A minimalist, high-performance personal GUI cockpit for **CachyOS / Arch Linux**.
+A desktop utility for managing common **CachyOS / Arch Linux** tasks.
 
 ## Features
 
-- **Pure Minimalist Design**: White canvas, high-contrast black typography, hard sharp geometric borders, soft drop shadows, and clean SVG vector icons (no emojis).
-- **Dashboard & Dev Cockpit**: Live CPU, RAM, Swap & ZRAM allocation meters, quick launchers for `nvtop` and `btop`, local HTTP/Vite dev server with recent project memory, Java version checker, and timed system shutdown.
-- **Updates & Package Management**: Full system update (Pacman + AUR + Flatpak) or granular separate updates, universal multi-source package search with source origin tags (`[core]`, `[extra]`, `[AUR]`, `[flatpak]`), CachyOS mirror rating, drag-and-drop `.pkg.tar.zst` installer, and 32-bit dependency conflict resolver.
-- **One-Click System Cleanup**: Dolphin file manager config reset, Steam shader cache & texture cleaner, Pacman & Yay cache wipes, unused Flatpak runtimes remover, systemd journal log vacuum, and EasyEffects locale override.
-- **Storage, Cloud & AppData**: Rclone Google Drive VFS mounter with Dolphin integration, partition health meters, and Steam Proton AppData shortcuts (No Man's Sky saves, compatdata prefixes).
-- **Audio & Bluetooth**: Controller restart, device scan, pair & connect, user systemd auto-connect service generator, and PipeWire audio node switcher.
-- **Network & Virtual Machines**: Libvirt / Virsh default network bridge controller, open listening ports inspector (`ss -tulpn`), ping and DNS latency diagnostics.
-- **Gaming & Runners**: UMU launcher with setup wizard detector, Minecraft dedicated server launcher with Java RAM settings and process killer, Sherlock username OSINT container tool, and local `./run.sh` script runner.
-- **Memory & ZRAM Tuner**: Live ZRAM monitor, `/etc/systemd/zram-generator.conf` generator, and dynamic `vm.swappiness` and `vm.page-cluster` tuner.
-- **Security & Auditing**: Howdy face authentication tester, SDDM manager, auditd real-time file watch rules, `inotifywait` monitor, and SUID/SGID file scanner.
-- **Live Terminal Log Drawer**: Non-blocking `QProcess` runner with real-time log streaming, cancel process support, copy to clipboard, and clear controls.
+- **Dashboard**: CPU, memory, swap, and ZRAM status; launchers for `nvtop` and `btop`; local development servers; Java selection; and shutdown scheduling.
+- **Packages and updates**: Search Arch repositories, AUR, and Flatpak; review pending updates; manage packages; and install local package files.
+- **Cleanup**: Reset Dolphin settings, clear package and shader caches, remove unused Flatpak runtimes, vacuum system logs, and change the EasyEffects locale.
+- **Storage and cloud**: Mount configured rclone remotes, inspect mounted filesystems, and open Steam Proton data folders.
+- **Audio and Bluetooth**: Discover and connect Bluetooth devices, restart Bluetooth, and choose a PipeWire playback output.
+- **Network and virtual machines**: Manage the default libvirt network, inspect listening ports, and run basic network diagnostics.
+- **Gaming tools**: Launch Windows executables with UMU, manage a local Minecraft server, and inspect or stop processes.
+- **Memory and security**: View and configure ZRAM, adjust selected kernel memory settings, inspect permissions, and manage audit watches.
+- **Command output**: Review command output, respond to interactive package manager prompts, and stop long-running commands.
 
 ## Running
+
+Requires Python 3.10+, PyQt6, and psutil. Install those dependencies for your distribution before starting the app. The generated AppImage uses the target system's Python, PyQt6, and psutil; it does not bundle them. Building it requires `appimagetool` installed separately.
 
 ```bash
 python3 main.py

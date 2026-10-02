@@ -1,7 +1,7 @@
 [Desktop Entry]
 Name=CachyOS Control Center
-Comment=Personal GUI Cockpit for CachyOS and Arch Linux
-Exec=main.py
+Comment=Desktop utility for CachyOS and Arch Linux
+Exec=AppRun
 Icon=cachy-control-center
 Terminal=false
 Type=Application

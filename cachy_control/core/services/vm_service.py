@@ -74,3 +74,10 @@ class VmService(IVmService):
 
     def get_define_default_net_command(self) -> str:
         return "sudo virsh net-define /usr/share/libvirt/networks/default.xml && sudo virsh net-start default && sudo virsh net-autostart default"
+
+    # Names retained by the view layer's public service interface.
+    def get_virsh_start_default_command(self) -> str:
+        return self.get_start_default_net_command()
+
+    def get_virsh_define_default_command(self) -> str:
+        return self.get_define_default_net_command()

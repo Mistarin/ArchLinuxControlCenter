@@ -4,6 +4,7 @@ Equipped with top sub-module tabs for focused organization.
 """
 
 from pathlib import Path
+import shutil
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
     QFileDialog, QScrollArea, QFrame
@@ -16,12 +17,14 @@ from cachy_control.ui.components.sharp_button import SharpButton
 from cachy_control.ui.components.stat_gauge import StatGauge
 from cachy_control.ui.components.section_badge import SectionBadge
 from cachy_control.ui.theme import THEMES
+from cachy_control.ui.components.task_worker import TaskWorker
 
 class StorageView(QWidget):
     def __init__(self, parent: QWidget = None):
         super().__init__(parent)
         self.services = ServiceRegistry.get()
         self.path_inputs = {}
+        self._refresh_worker = None
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(24, 20, 24, 20)
@@ -102,7 +105,7 @@ class StorageView(QWidget):
         nms_title = QLabel("No Man's Sky (AppID 275850) Saves & AppData")
         nms_title.setStyleSheet("font-weight: 700; font-size: 12px;")
         nms_path_label = QLabel(".../compatdata/275850/pfx/drive_c/users/steamuser/AppData/Roaming/HelloGames/NMS/")
-        nms_path_label.setStyleSheet("opacity: 0.85; font-size: 11px;")
+        nms_path_label.setStyleSheet("font-size: 11px;")
         nms_info.addWidget(nms_title)
         nms_info.addWidget(nms_path_label)
         nms_row.addLayout(nms_info)
@@ -119,7 +122,7 @@ class StorageView(QWidget):
         gen_title = QLabel("All Steam Proton Prefixes (compatdata)")
         gen_title.setStyleSheet("font-weight: 700; font-size: 12px;")
         gen_path_label = QLabel("~/.local/share/Steam/steamapps/compatdata/")
-        gen_path_label.setStyleSheet("opacity: 0.85; font-size: 11px;")
+        gen_path_label.setStyleSheet("font-size: 11px;")
         gen_info.addWidget(gen_title)
         gen_info.addWidget(gen_path_label)
         gen_row.addLayout(gen_info)
@@ -153,10 +156,30 @@ class StorageView(QWidget):
         self.steam_card.setVisible(show_all or active_key == "steam")
 
     def _refresh_all(self):
-        self._render_cloud_mounts()
-        self._render_disk_partitions()
+        if self._refresh_worker and self._refresh_worker.isRunning():
+            return
+        self.refresh_btn.setEnabled(False)
+        self._refresh_worker = TaskWorker(
+            lambda: (self.services.storage.get_cloud_mounts(), self.services.storage.get_disk_partitions()),
+            self,
+        )
+        self._refresh_worker.result_ready.connect(self._display_refresh)
+        self._refresh_worker.failed.connect(self._refresh_failed)
+        self._refresh_worker.start()
 
-    def _render_cloud_mounts(self):
+    def _display_refresh(self, result):
+        self._refresh_worker = None
+        self.refresh_btn.setEnabled(True)
+        self._render_cloud_mounts(result[0])
+        self._render_disk_partitions(result[1])
+
+    def _refresh_failed(self, message: str):
+        self._refresh_worker = None
+        self.refresh_btn.setEnabled(True)
+        self.services.runner.log(f"Could not refresh storage information: {message}")
+
+    def _render_cloud_mounts(self, mounts):
+        self.path_inputs.clear()
         while self.cloud_list_layout.count():
             item = self.cloud_list_layout.takeAt(0)
             if item.widget():
@@ -166,12 +189,12 @@ class StorageView(QWidget):
                     sub = item.layout().takeAt(0)
                     if sub.widget(): sub.widget().deleteLater()
 
-        mounts = self.services.storage.get_cloud_mounts()
         for mount in mounts:
             row = QHBoxLayout()
             row.setSpacing(10)
 
-            name_lbl = QLabel(f"Remote: <b>{mount.remote_name}</b>")
+            name_lbl = QLabel(f"Remote: {mount.remote_name}")
+            name_lbl.setTextFormat(Qt.TextFormat.PlainText)
             name_lbl.setFixedWidth(130)
             row.addWidget(name_lbl)
 
@@ -194,7 +217,11 @@ class StorageView(QWidget):
                 row.addWidget(open_btn)
             else:
                 mount_btn = SharpButton("Mount (VFS Daemon)", icon_name="cloud", variant="primary")
-                mount_btn.clicked.connect(lambda _, m=mount: self._mount_cloud(m.remote_name, path_input.text().strip()))
+                mount_btn.clicked.connect(
+                    lambda _, m=mount, input_widget=path_input: self._mount_cloud(
+                        m.remote_name, input_widget.text().strip()
+                    )
+                )
                 row.addWidget(mount_btn)
 
                 reauth_btn = SharpButton("Refresh Token / Reconnect", icon_name="refresh", variant="outline")
@@ -210,7 +237,7 @@ class StorageView(QWidget):
             if chosen:
                 self.path_inputs[remote].setText(chosen)
 
-    def _render_disk_partitions(self):
+    def _render_disk_partitions(self, partitions):
         while self.disks_layout.count():
             item = self.disks_layout.takeAt(0)
             if item.widget(): item.widget().deleteLater()
@@ -219,7 +246,6 @@ class StorageView(QWidget):
                     sub = item.layout().takeAt(0)
                     if sub.widget(): sub.widget().deleteLater()
 
-        partitions = self.services.storage.get_disk_partitions()
         for p in partitions:
             gauge = StatGauge(f"{p.device} ({p.mountpoint}) - {p.fstype}", "%")
             gauge.set_value(p.percent, f"{p.used_gb:.1f} / {p.total_gb:.1f} GB ({p.free_gb:.1f} GB free)")
@@ -243,12 +269,17 @@ class StorageView(QWidget):
 
     def _open_dir(self, path: str):
         expanded = str(Path(path).expanduser())
-        self.services.runner.run_command(f"dolphin '{expanded}' &")
+        viewer = "dolphin" if shutil.which("dolphin") else "xdg-open"
+        self.services.runner.launch_detached([viewer, expanded])
 
     def _open_nms_appdata(self):
         path = str(Path.home() / ".local" / "share" / "Steam" / "steamapps" / "compatdata" / "275850" / "pfx" / "drive_c" / "users" / "steamuser" / "AppData" / "Roaming" / "HelloGames" / "NMS")
-        self.services.runner.run_command(f"mkdir -p '{path}' && dolphin '{path}' &")
+        Path(path).mkdir(parents=True, exist_ok=True)
+        viewer = "dolphin" if shutil.which("dolphin") else "xdg-open"
+        self.services.runner.launch_detached([viewer, path])
 
     def _open_compatdata(self):
         path = str(Path.home() / ".local" / "share" / "Steam" / "steamapps" / "compatdata")
-        self.services.runner.run_command(f"mkdir -p '{path}' && dolphin '{path}' &")
+        Path(path).mkdir(parents=True, exist_ok=True)
+        viewer = "dolphin" if shutil.which("dolphin") else "xdg-open"
+        self.services.runner.launch_detached([viewer, path])

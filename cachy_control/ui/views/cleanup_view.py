@@ -73,7 +73,7 @@ class CleanupView(QWidget):
         d_title.setStyleSheet("font-weight: 700; font-size: 13px;")
         d_desc = QLabel("Clears broken config (dolphinrc), session window states, and local share cache.")
         d_desc.setWordWrap(True)
-        d_desc.setStyleSheet("opacity: 0.85; font-size: 11px;")
+        d_desc.setStyleSheet("font-size: 11px;")
         d_btn = SharpButton("Reset Dolphin Config", icon_name="trash", variant="danger")
         d_btn.clicked.connect(self._reset_dolphin)
         d_box.addWidget(d_title)
@@ -87,7 +87,7 @@ class CleanupView(QWidget):
         p_title.setStyleSheet("font-weight: 700; font-size: 13px;")
         p_desc = QLabel("Removes downloaded package tarballs from /var/cache/pacman/pkg.")
         p_desc.setWordWrap(True)
-        p_desc.setStyleSheet("opacity: 0.85; font-size: 11px;")
+        p_desc.setStyleSheet("font-size: 11px;")
         p_btn = SharpButton("Clear Pacman & Yay Cache", icon_name="trash", variant="danger")
         p_btn.clicked.connect(self._clean_pacman_cache)
         p_box.addWidget(p_title)
@@ -101,7 +101,7 @@ class CleanupView(QWidget):
         f_title.setStyleSheet("font-weight: 700; font-size: 13px;")
         f_desc = QLabel("Uninstalls orphan runtimes and libraries that are no longer referenced.")
         f_desc.setWordWrap(True)
-        f_desc.setStyleSheet("opacity: 0.85; font-size: 11px;")
+        f_desc.setStyleSheet("font-size: 11px;")
         f_btn = SharpButton("Remove Unused Flatpaks", icon_name="trash", variant="outline")
         f_btn.clicked.connect(self._clean_flatpak_unused)
         f_box.addWidget(f_title)
@@ -115,7 +115,7 @@ class CleanupView(QWidget):
         j_title.setStyleSheet("font-weight: 700; font-size: 13px;")
         j_desc = QLabel("Caps persistent journal log sizes to 100MB to avoid excessive disk bloat.")
         j_desc.setWordWrap(True)
-        j_desc.setStyleSheet("opacity: 0.85; font-size: 11px;")
+        j_desc.setStyleSheet("font-size: 11px;")
         j_btn = SharpButton("Vacuum Journal to 100M", icon_name="trash", variant="outline")
         j_btn.clicked.connect(self._vacuum_journal)
         j_box.addWidget(j_title)
@@ -135,7 +135,7 @@ class CleanupView(QWidget):
         s_input_row.setSpacing(10)
 
         app_id_lbl = QLabel("Steam App ID:")
-        app_id_lbl.setStyleSheet("font-size: 12px; opacity: 0.85;")
+        app_id_lbl.setStyleSheet("font-size: 12px;")
         s_input_row.addWidget(app_id_lbl)
 
         self.app_id_input = QLineEdit("275850")
@@ -155,7 +155,7 @@ class CleanupView(QWidget):
         s_layout.addLayout(s_input_row)
 
         tip_lbl = QLabel("Tip: Deleting the App ID folder inside steamapps/shadercache forces Proton/Vulkan to rebuild clean texture pipelines upon next launch.")
-        tip_lbl.setStyleSheet("font-size: 11px; opacity: 0.85;")
+        tip_lbl.setStyleSheet("font-size: 11px;")
         s_layout.addWidget(tip_lbl)
 
         self.shader_card.add_layout(s_layout)
@@ -215,17 +215,31 @@ class CleanupView(QWidget):
         if confirm_destructive_action(
             self,
             "Clear Pacman and Yay Cache",
-            "This will execute 'paccache -r -k 2' and 'yay -Sc --noconfirm' to remove downloaded tarballs. Proceed?",
+            "Remove downloaded package archives while keeping the two newest versions. Review any additional prompts in the terminal.",
             "Yes, Clear Cache"
         ):
             cmd = self.services.cleanup.get_clean_pacman_cache_command()
             self.services.runner.run_command(cmd)
 
     def _clean_flatpak_unused(self):
+        if not confirm_destructive_action(
+            self,
+            "Remove Unused Flatpak Runtimes",
+            "Flatpak will show the runtimes and extensions it plans to remove. Review that list in the terminal before confirming.",
+            "Review Removal",
+        ):
+            return
         cmd = self.services.cleanup.get_clean_flatpak_command()
         self.services.runner.run_command(cmd)
 
     def _vacuum_journal(self):
+        if not confirm_destructive_action(
+            self,
+            "Vacuum System Journal",
+            "Remove older journal entries until the stored journal is at most 100 MB. This can delete logs needed for troubleshooting.",
+            "Vacuum Journal",
+        ):
+            return
         cmd = self.services.cleanup.get_vacuum_journal_command()
         self.services.runner.run_command(cmd)
 

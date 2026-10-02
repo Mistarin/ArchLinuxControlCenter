@@ -10,12 +10,13 @@ Updates & Package Management View:
 
 import shutil
 import shlex
+import re
 from pathlib import Path
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
     QTableWidget, QTableWidgetItem, QHeaderView, QScrollArea, QFrame
 )
-from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer
+from PyQt6.QtCore import Qt, QTimer
 
 from cachy_control.core.service_registry import ServiceRegistry
 from cachy_control.core.contracts.package_contract import PackageItem, PendingUpdate
@@ -26,29 +27,7 @@ from cachy_control.ui.components.dependency_button import DependencyButton
 from cachy_control.ui.components.section_badge import SectionBadge
 from cachy_control.ui.components.drop_zone import DropZone
 from cachy_control.ui.theme import THEMES, DESTRUCTIVE_RED
-
-class SearchWorker(QThread):
-    results_ready = pyqtSignal(list)
-
-    def __init__(self, query: str, package_service):
-        super().__init__()
-        self.query = query
-        self.package_service = package_service
-
-    def run(self):
-        res = self.package_service.search_all(self.query)
-        self.results_ready.emit(res)
-
-class CheckUpdatesWorker(QThread):
-    updates_ready = pyqtSignal(list)
-
-    def __init__(self, package_service):
-        super().__init__()
-        self.package_service = package_service
-
-    def run(self):
-        res = self.package_service.get_pending_updates()
-        self.updates_ready.emit(res)
+from cachy_control.ui.components.task_worker import TaskWorker
 
 class UpdatesView(QWidget):
     def __init__(self, parent: QWidget = None):
@@ -58,10 +37,12 @@ class UpdatesView(QWidget):
         self.check_worker = None
         self.active_sub_tab = "search"
 
-        # Search debounce timer (150ms for instant search)
+        # Debounce package search while typing.
         self.search_timer = QTimer(self)
         self.search_timer.setSingleShot(True)
         self.search_timer.timeout.connect(self._do_search)
+        self._search_again = False
+        self._check_again = False
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(24, 20, 24, 20)
@@ -85,7 +66,7 @@ class UpdatesView(QWidget):
             ("search", "Universal Search", "search"),
             ("updates", "Pending Updates", "refresh"),
             ("repos", "Granular & Repos", "package"),
-            ("doctor", "Package Doctor", "shield"),
+            ("doctor", "Package Repair", "shield"),
             ("installer", "Local Installer", "download"),
             ("all", "Show All", "sliders"),
         ]
@@ -119,7 +100,7 @@ class UpdatesView(QWidget):
 
         self.search_input = QLineEdit()
         self.search_input.setPlaceholderText("Search packages instantly as you type (e.g. discord, easyeffects, vlc, steam)...")
-        self.search_input.textChanged.connect(lambda: self.search_timer.start(150))
+        self.search_input.textChanged.connect(lambda: self.search_timer.start(250))
         self.search_input.returnPressed.connect(self._do_search)
         s_input_row.addWidget(self.search_input, 1)
 
@@ -213,7 +194,7 @@ class UpdatesView(QWidget):
         self.c_layout.addWidget(self.update_card)
 
         # 4. Package Doctor Card
-        self.fix_card = SharpCard("Package Conflict & Health Doctor", "Diagnose & resolve pacman collisions, broken dependencies, locked DBs & PGP keyring errors")
+        self.fix_card = SharpCard("Package Repair Tools", "Check dependencies, repair keyrings, resolve file conflicts, or remove a stale database lock")
         f_layout = QVBoxLayout()
         f_layout.setSpacing(10)
 
@@ -225,11 +206,11 @@ class UpdatesView(QWidget):
         diag_row.addWidget(self.check_deps_btn)
 
         self.fix_keys_btn = SharpButton("Repair PGP Keys", icon_name="shield", variant="outline")
-        self.fix_keys_btn.clicked.connect(lambda: self.services.runner.run_command("sudo pacman-key --init && sudo pacman-key --populate archlinux cachyos && sudo pacman -S --needed --noconfirm archlinux-keyring cachyos-keyring"))
+        self.fix_keys_btn.clicked.connect(lambda: self.services.runner.run_command("sudo pacman-key --init && sudo pacman-key --populate archlinux cachyos && sudo pacman -S --needed archlinux-keyring cachyos-keyring"))
         diag_row.addWidget(self.fix_keys_btn)
 
         self.unlock_db_btn = SharpButton("Unlock DB (db.lck)", icon_name="cross", variant="outline")
-        self.unlock_db_btn.clicked.connect(lambda: self.services.runner.run_command("sudo rm -f /var/lib/pacman/db.lck && echo 'Pacman database lock removed!'"))
+        self.unlock_db_btn.clicked.connect(self._unlock_package_database)
         diag_row.addWidget(self.unlock_db_btn)
         diag_row.addStretch()
         f_layout.addLayout(diag_row)
@@ -307,14 +288,26 @@ class UpdatesView(QWidget):
         self.refresh_check_btn.setText("Scanning...")
 
         if self.check_worker and self.check_worker.isRunning():
-            self.check_worker.terminate()
-            self.check_worker.wait()
+            self._check_again = True
+            return
 
-        self.check_worker = CheckUpdatesWorker(self.services.packages)
-        self.check_worker.updates_ready.connect(self._display_pending_updates)
+        self.check_worker = TaskWorker(self.services.packages.get_pending_updates, self)
+        self.check_worker.result_ready.connect(self._display_pending_updates)
+        self.check_worker.failed.connect(self._check_updates_failed)
         self.check_worker.start()
 
+    def _check_updates_failed(self, message: str):
+        self.check_worker = None
+        self.refresh_check_btn.setEnabled(True)
+        self.refresh_check_btn.setText("Check for Updates")
+        self.status_summary_lbl.setText("Update check failed. Try again.")
+        self.services.runner.log(f"Update check failed: {message}")
+        if self._check_again:
+            self._check_again = False
+            self._start_check_updates()
+
     def _display_pending_updates(self, updates: list):
+        self.check_worker = None
         self.refresh_check_btn.setEnabled(True)
         self.refresh_check_btn.setText("Check for Updates")
         self.updates_table.setRowCount(len(updates))
@@ -326,6 +319,9 @@ class UpdatesView(QWidget):
             self.updates_table.setItem(0, 1, empty_item)
             self.status_summary_lbl.setText("✓ Your system and applications are fully up to date!")
             self.full_update_top_btn.setEnabled(False)
+            if self._check_again:
+                self._check_again = False
+                self._start_check_updates()
             return
 
         self.full_update_top_btn.setEnabled(True)
@@ -362,14 +358,13 @@ class UpdatesView(QWidget):
             act_layout.addWidget(up_btn)
 
             self.updates_table.setCellWidget(row, 6, act_container)
+        if self._check_again:
+            self._check_again = False
+            self._start_check_updates()
 
     def _update_single(self, pkg_name: str, source: str):
-        if source == "aur":
-            cmd = f"yay -S --noconfirm {pkg_name}"
-        elif source == "flatpak":
-            cmd = f"flatpak update -y {pkg_name}"
-        else:
-            cmd = f"sudo pacman -S --noconfirm {pkg_name}"
+        update = PendingUpdate(pkg_name, "", "", source, "", "")
+        cmd = self.services.packages.get_single_update_command(update)
         self.services.runner.run_command(cmd, on_finish=lambda _: self._start_check_updates())
 
     def _run_update(self, manager: str):
@@ -380,12 +375,30 @@ class UpdatesView(QWidget):
         query = self.search_input.text().strip()
 
         if self.search_worker and self.search_worker.isRunning():
-            self.search_worker.terminate()
-            self.search_worker.wait()
+            self._search_again = True
+            return
 
-        self.search_worker = SearchWorker(query, self.services.packages)
-        self.search_worker.results_ready.connect(self._display_search_results)
+        self._search_again = False
+        self.search_worker = TaskWorker(lambda: (query, self.services.packages.search_all(query)), self)
+        self.search_worker.result_ready.connect(self._display_search_result)
+        self.search_worker.failed.connect(self._search_failed)
         self.search_worker.start()
+
+    def _search_failed(self, message: str):
+        self.search_worker = None
+        self.services.runner.log(f"Package search failed: {message}")
+        if self._search_again:
+            self._search_again = False
+            self.search_timer.start(0)
+
+    def _display_search_result(self, result):
+        self.search_worker = None
+        query, items = result
+        if query != self.search_input.text().strip() or self._search_again:
+            self._search_again = False
+            self.search_timer.start(0)
+            return
+        self._display_search_results(items)
 
     def _display_search_results(self, items: list):
         t_key = self.services.settings.get("theme", "light")
@@ -478,19 +491,40 @@ class UpdatesView(QWidget):
         pkg = self.conflict_pkg_input.text().strip()
         if not pkg:
             return
-        cmd = f"sudo pacman -S --overwrite '*' --noconfirm {pkg}"
-        self.services.runner.run_command(cmd)
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9@._+-]*", pkg):
+            self.services.runner.log("Enter a valid package name (letters, numbers, @, ., _, +, or -).")
+            return
+        if not confirm_destructive_action(
+            self,
+            f"Overwrite Files for {pkg}",
+            "Pacman will be allowed to replace any file paths that conflict with this package. Review the transaction and ownership details before confirming.",
+            "Review Overwrite",
+        ):
+            return
+        self.services.runner.run_argv(["sudo", "pacman", "-S", "--overwrite", "*", pkg])
+
+    def _unlock_package_database(self):
+        if not confirm_destructive_action(
+            self,
+            "Remove Pacman Database Lock",
+            "Only do this after confirming no pacman, yay, or paru operation is running. Removing an active lock can corrupt package database operations.",
+            "Remove Lock File",
+        ):
+            return
+        self.services.runner.run_argv(["sudo", "rm", "-f", "/var/lib/pacman/db.lck"])
 
     def _force_remove_conflict(self):
         pkg = self.rdd_pkg_input.text().strip()
         if not pkg:
             return
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9@._+-]*", pkg):
+            self.services.runner.log("Enter a valid package name (letters, numbers, @, ., _, +, or -).")
+            return
         if not confirm_destructive_action(
             self,
             f"Force Remove {pkg} (-Rdd)",
-            f"CAUTION: Force-removing {pkg} bypasses pacman dependency checks (-Rdd) and may break packages that depend on it.\n\nCommand: sudo pacman -Rdd --noconfirm {pkg}",
+            f"CAUTION: Force-removing {pkg} bypasses pacman dependency checks (-Rdd) and may break packages that depend on it. Review the package manager's proposed transaction before confirming.\n\nCommand: sudo pacman -Rdd {pkg}",
             "Force Remove (-Rdd)"
         ):
             return
-        cmd = f"sudo pacman -Rdd --noconfirm {pkg}"
-        self.services.runner.run_command(cmd)
+        self.services.runner.run_argv(["sudo", "pacman", "-Rdd", pkg])

@@ -12,6 +12,7 @@ import shutil
 import re
 import shlex
 import logging
+import threading
 from typing import List, Set, Optional
 from cachy_control.core.contracts.package_contract import IPackageService, PackageItem, PendingUpdate
 
@@ -19,11 +20,19 @@ logger = logging.getLogger(__name__)
 
 class PackageService(IPackageService):
     def __init__(self):
+        self._alpm_lock = threading.RLock()
         self._alpm_handle = None
         self._syncdbs = []
         self._localdb = None
         self._installed_cache: Set[str] = set()
-        self._init_alpm()
+        self._alpm_init_attempted = False
+
+    def _ensure_alpm_initialized(self) -> None:
+        with self._alpm_lock:
+            if self._alpm_init_attempted:
+                return
+            self._alpm_init_attempted = True
+            self._init_alpm()
 
     def _init_alpm(self):
         try:
@@ -49,6 +58,7 @@ class PackageService(IPackageService):
         Store cards must only read this snapshot; package-manager commands are
         deliberately kept out of individual widget construction.
         """
+        self._ensure_alpm_initialized()
         if refresh or not hasattr(self, "_installed_source_cache"):
             arch = set(self._get_installed_set())
             if not arch and not self._localdb and shutil.which("pacman"):
@@ -83,12 +93,14 @@ class PackageService(IPackageService):
         return package in installed["flatpak" if source_type == "flatpak" else "arch"]
 
     def _get_installed_set(self) -> Set[str]:
-        if self._localdb:
-            try:
-                self._installed_cache = {pkg.name for pkg in self._localdb.pkgcache}
-            except Exception as exc:
-                logger.warning("Could not refresh the ALPM installed package cache: %s", exc)
-        return self._installed_cache
+        self._ensure_alpm_initialized()
+        with self._alpm_lock:
+            if self._localdb:
+                try:
+                    self._installed_cache = {pkg.name for pkg in self._localdb.pkgcache}
+                except Exception as exc:
+                    logger.warning("Could not refresh the ALPM installed package cache: %s", exc)
+            return set(self._installed_cache)
 
     def get_pending_updates(self) -> List[PendingUpdate]:
         updates: List[PendingUpdate] = []
@@ -213,7 +225,7 @@ class PackageService(IPackageService):
                 'obs-studio', 'easyeffects', 'fastfetch', 'btop', 'nvtop', 'firefox',
                 'gimp', 'lutris', 'spotify-launcher', 'visual-studio-code-bin', 'alacritty'
             ]
-            if self._syncdbs:
+            with self._alpm_lock:
                 for name in popular_names:
                     for db in self._syncdbs:
                         pkg = db.get_pkg(name)
@@ -229,60 +241,61 @@ class PackageService(IPackageService):
                             break
             return results
 
-        # 1. Native Ultra-Fast In-Memory Search (pyalpm)
-        if self._syncdbs:
-            temp_results = []
-            for db in self._syncdbs:
-                for pkg in db.pkgcache:
-                    name_lower = pkg.name.lower()
-                    name_match = q in name_lower
-                    desc_match = bool(pkg.desc and q in pkg.desc.lower())
-                    if name_match or desc_match:
-                        score = 0 if name_lower == q else (1 if name_lower.startswith(q) else (2 if name_match else 3))
-                        temp_results.append((score, len(pkg.name), db.name, pkg))
-                        if len(temp_results) >= limit * 3:
-                            break
+        # 1. Native in-memory search (pyalpm).
+        with self._alpm_lock:
+            if self._syncdbs:
+                temp_results = []
+                for db in self._syncdbs:
+                    for pkg in db.pkgcache:
+                        name_lower = pkg.name.lower()
+                        name_match = q in name_lower
+                        desc_match = bool(pkg.desc and q in pkg.desc.lower())
+                        if name_match or desc_match:
+                            score = 0 if name_lower == q else (1 if name_lower.startswith(q) else (2 if name_match else 3))
+                            temp_results.append((score, len(pkg.name), db.name, pkg))
+                            if len(temp_results) >= limit * 3:
+                                break
 
-            # Sort by match score & shortest name
-            temp_results.sort(key=lambda x: (x[0], x[1]))
-            for _, _, db_name, pkg in temp_results[:limit]:
-                if pkg.name not in seen_names:
-                    seen_names.add(pkg.name)
-                    results.append(PackageItem(
-                        name=pkg.name,
-                        version=pkg.version,
-                        repo_or_source=db_name,
-                        description=pkg.desc or '',
-                        installed=pkg.name in installed_set
-                    ))
-        else:
+                # Sort by match score & shortest name.
+                temp_results.sort(key=lambda x: (x[0], x[1]))
+                for _, _, db_name, pkg in temp_results[:limit]:
+                    if pkg.name not in seen_names:
+                        seen_names.add(pkg.name)
+                        results.append(PackageItem(
+                            name=pkg.name,
+                            version=pkg.version,
+                            repo_or_source=db_name,
+                            description=pkg.desc or '',
+                            installed=pkg.name in installed_set
+                        ))
+            else:
             # Fallback to pacman CLI if pyalpm not registered
-            try:
-                res = subprocess.run(["pacman", "-Ss", q], capture_output=True, text=True, timeout=4)
-                if res.returncode == 0:
-                    lines = res.stdout.strip().split("\n")
-                    i = 0
-                    while i < len(lines) and len(results) < limit:
-                        line = lines[i]
-                        match = re.match(r"^(\w+)/([^\s]+)\s+([^\s]+)(.*)$", line)
-                        if match:
-                            repo, name, ver, extra = match.groups()
-                            installed = "[installed" in extra
-                            desc = lines[i+1].strip() if i+1 < len(lines) else ""
-                            if name not in seen_names:
-                                seen_names.add(name)
-                                results.append(PackageItem(
-                                    name=name,
-                                    version=ver,
-                                    repo_or_source=repo,
-                                    description=desc,
-                                    installed=installed
-                                ))
-                            i += 2
-                        else:
-                            i += 1
-            except (OSError, subprocess.SubprocessError) as exc:
-                logger.warning("AUR search failed: %s", exc)
+                try:
+                    res = subprocess.run(["pacman", "-Ss", q], capture_output=True, text=True, timeout=4)
+                    if res.returncode == 0:
+                        lines = res.stdout.strip().split("\n")
+                        i = 0
+                        while i < len(lines) and len(results) < limit:
+                            line = lines[i]
+                            match = re.match(r"^(\w+)/([^\s]+)\s+([^\s]+)(.*)$", line)
+                            if match:
+                                repo, name, ver, extra = match.groups()
+                                installed = "[installed" in extra
+                                desc = lines[i+1].strip() if i+1 < len(lines) else ""
+                                if name not in seen_names:
+                                    seen_names.add(name)
+                                    results.append(PackageItem(
+                                        name=name,
+                                        version=ver,
+                                        repo_or_source=repo,
+                                        description=desc,
+                                        installed=installed
+                                    ))
+                                i += 2
+                            else:
+                                i += 1
+                except (OSError, subprocess.SubprocessError) as exc:
+                    logger.warning("Package search failed: %s", exc)
 
         # 2. AUR Search (Append top results if needed)
         aur_tool = "yay" if shutil.which("yay") else ("paru" if shutil.which("paru") else None)
@@ -355,59 +368,64 @@ class PackageService(IPackageService):
         
         if manager == "all":
             cmds = []
-            if shutil.which(aur_tool):
-                cmds.append(f"{aur_tool} -Syu --noconfirm")
+            if aur_tool in ("yay", "paru") and shutil.which(aur_tool):
+                cmds.append(f"{aur_tool} -Syu")
             else:
-                cmds.append("sudo pacman -Syu --noconfirm")
+                cmds.append("sudo pacman -Syu")
             if shutil.which("flatpak"):
-                cmds.append("flatpak update -y")
+                cmds.append("flatpak update")
             return " && ".join(cmds)
         elif manager == "pacman":
-            return "sudo pacman -Syu --noconfirm"
+            return "sudo pacman -Syu"
         elif manager == "yay":
-            return "yay -Syu --noconfirm"
+            return "yay -Syu"
         elif manager == "paru":
-            return "paru -Syu --noconfirm"
+            return "paru -Syu"
         elif manager == "flatpak":
-            return "flatpak update -y"
+            return "flatpak update"
         elif manager == "rate_mirrors":
             return "sudo cachyos-rate-mirrors"
-        return "sudo pacman -Syu --noconfirm"
+        return "sudo pacman -Syu"
 
     def get_install_command(self, pkg: PackageItem) -> str:
         safe_name = shlex.quote(pkg.name)
         if pkg.repo_or_source.lower() == "flatpak":
-            return f"flatpak install flathub {safe_name} -y"
+            return f"flatpak install flathub {safe_name}"
         elif pkg.repo_or_source.lower() == "aur":
-            aur = "yay" if shutil.which("yay") else "paru"
-            return f"{aur} -S --noconfirm {safe_name}"
+            aur = "yay" if shutil.which("yay") else ("paru" if shutil.which("paru") else None)
+            if not aur:
+                return "echo 'Install yay or paru before installing AUR packages.'; exit 127"
+            return f"{aur} -S {safe_name}"
         else:
-            return f"sudo pacman -S --needed --noconfirm {safe_name}"
+            return f"sudo pacman -S --needed {safe_name}"
 
     def get_single_update_command(self, update: PendingUpdate) -> str:
-        if update.repo_or_source.lower() == "flatpak":
+        source = update.repo_or_source.lower()
+        if source == "flatpak":
             match = re.search(r'\(([^)]+)\)', update.name)
             app_id = match.group(1) if match else update.name
             safe_id = shlex.quote(app_id)
-            return f"flatpak update {safe_id} -y"
-        elif update.repo_or_source.lower() == "aur":
-            aur = "yay" if shutil.which("yay") else "paru"
+            return f"flatpak update {safe_id}"
+        elif source == "aur":
+            aur = "yay" if shutil.which("yay") else ("paru" if shutil.which("paru") else None)
+            if not aur:
+                return "echo 'Install yay or paru before updating AUR packages.'; exit 127"
             safe_name = shlex.quote(update.name)
-            return f"{aur} -S --noconfirm {safe_name}"
+            return f"{aur} -S {safe_name}"
         else:
             safe_name = shlex.quote(update.name)
-            return f"sudo pacman -S --noconfirm {safe_name}"
+            return f"sudo pacman -S {safe_name}"
 
     def get_remove_command(self, pkg: PackageItem) -> str:
         safe_name = shlex.quote(pkg.name)
         if pkg.repo_or_source.lower() == "flatpak":
-            return f"flatpak uninstall -y {safe_name}"
+            return f"flatpak uninstall {safe_name}"
         elif pkg.repo_or_source.lower() == "aur":
             aur = "yay" if shutil.which("yay") else ("paru" if shutil.which("paru") else "pacman")
-            return f"{aur} -Rns --noconfirm {safe_name}"
+            return f"{aur} -Rns {safe_name}"
         else:
-            return f"sudo pacman -Rns --noconfirm {safe_name}"
+            return f"sudo pacman -Rns {safe_name}"
 
     def get_local_install_command(self, file_path: str) -> str:
         safe_path = shlex.quote(file_path)
-        return f"sudo pacman -U --noconfirm {safe_path}"
+        return f"sudo pacman -U {safe_path}"

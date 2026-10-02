@@ -19,6 +19,8 @@ class NotificationToast(QFrame):
         self.setFixedSize(360, 95)
         self.setGraphicsEffect(create_deep_shadow())
         self.services = ServiceRegistry.get()
+        theme_key = self.services.settings.get("theme", "light")
+        t = THEMES.get(theme_key, THEMES["light"])
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(14, 12, 14, 12)
@@ -39,14 +41,13 @@ class NotificationToast(QFrame):
         self.close_btn = QPushButton("✕")
         self.close_btn.setFixedSize(18, 18)
         self.close_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.close_btn.setStyleSheet("""
+        self.close_btn.setStyleSheet(f"""
             QPushButton {
                 background: transparent;
                 border: none;
                 font-size: 11px;
-                opacity: 0.6;
             }
-            QPushButton:hover { opacity: 1.0; }
+            QPushButton:hover {{ color: {t['text']}; }}
         """)
         self.close_btn.clicked.connect(self.hide)
         h_row.addWidget(self.close_btn)
@@ -55,7 +56,7 @@ class NotificationToast(QFrame):
         # Body Message Row
         self.msg_lbl = QLabel("Operation executed successfully.")
         self.msg_lbl.setWordWrap(True)
-        self.msg_lbl.setStyleSheet("font-size: 11px; opacity: 0.85;")
+        self.msg_lbl.setStyleSheet(f"font-size: 11px; color: {t['muted']};")
         layout.addWidget(self.msg_lbl)
 
         # Bottom Actions Row

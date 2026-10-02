@@ -39,6 +39,8 @@ class DependencyService:
         
         if is_aur:
             aur_tool = "yay" if shutil.which("yay") else ("paru" if shutil.which("paru") else "pacman")
-            return f"{aur_tool} -S --noconfirm {pkg_name}"
+            if aur_tool == "pacman":
+                return "echo 'Install yay or paru before installing AUR packages.'; exit 127"
+            return f"{aur_tool} -S {pkg_name}"
         else:
-            return f"sudo pacman -S --needed --noconfirm {pkg_name}"
+            return f"sudo pacman -S --needed {pkg_name}"

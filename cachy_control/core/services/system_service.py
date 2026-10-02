@@ -91,13 +91,21 @@ class SystemService(ISystemService):
             icon_path = Path(__file__).parent.parent.parent / "ui" / "assets" / "logo.png"
         return str(icon_path)
 
+    @staticmethod
+    def _desktop_exec_arg(value: str) -> str:
+        """Quote one argument according to the Desktop Entry Exec field rules."""
+        escaped = value.replace("\\", "\\\\").replace('"', '\\"').replace("`", "\\`").replace("$", "\\$").replace("%", "%%")
+        return f'"{escaped}"'
+
     def _generate_desktop_entry(self) -> str:
         script = self._get_main_script_path()
         icon = self._get_icon_path()
+        executable = self._desktop_exec_arg(sys.executable)
+        script_arg = self._desktop_exec_arg(script)
         return f"""[Desktop Entry]
 Name=CachyOS Control Center
-Comment=Personal GUI Cockpit for CachyOS and Arch Linux
-Exec={sys.executable} {script}
+Comment=Desktop utility for CachyOS and Arch Linux
+Exec={executable} {script_arg}
 Icon={icon}
 Terminal=false
 Type=Application

@@ -24,6 +24,7 @@ from cachy_control.ui.components.sharp_button import SharpButton
 from cachy_control.ui.components.section_badge import SectionBadge
 from cachy_control.ui.icons import get_pixmap, get_icon
 from cachy_control.ui.theme import THEMES
+from cachy_control.ui.components.task_worker import TaskWorker
 
 # Helper to fetch real system/flatpak desktop icons
 def get_app_icon(icon_names: List[str], fallback_icon: str = "package", size: int = 40, color: str = None) -> QPixmap:
@@ -491,12 +492,14 @@ class AppInstallDialog(QDialog):
         pkg = src.get("pkg", "")
 
         if stype == "flatpak":
-            return f"flatpak install flathub {shlex.quote(pkg)} -y"
+            return f"flatpak install flathub {shlex.quote(pkg)}"
         elif stype == "aur":
-            aur = "yay" if shutil.which("yay") else ("paru" if shutil.which("paru") else "pacman")
-            return f"{aur} -S --noconfirm {shlex.quote(pkg)}"
+            aur = "yay" if shutil.which("yay") else ("paru" if shutil.which("paru") else None)
+            if not aur:
+                return "echo 'Install yay or paru before installing AUR packages.'; exit 127"
+            return f"{aur} -S {shlex.quote(pkg)}"
         else: # pacman
-            return f"sudo pacman -S --needed --noconfirm {shlex.quote(pkg)}"
+            return f"sudo pacman -S --needed {shlex.quote(pkg)}"
 
     def _update_command_preview(self):
         cmd = self._get_current_command()
@@ -515,12 +518,14 @@ class AppInstallDialog(QDialog):
         stype = src.get("type", "pacman")
         pkg = src.get("pkg", "")
         if stype == "flatpak":
-            return f"flatpak uninstall -y {shlex.quote(pkg)}"
+            return f"flatpak uninstall {shlex.quote(pkg)}"
         elif stype == "aur":
-            aur = "yay" if shutil.which("yay") else ("paru" if shutil.which("paru") else "pacman")
-            return f"{aur} -Rns --noconfirm {shlex.quote(pkg)}"
+            aur = "yay" if shutil.which("yay") else ("paru" if shutil.which("paru") else None)
+            if not aur:
+                return "echo 'Install yay or paru before removing AUR packages.'; exit 127"
+            return f"{aur} -Rns {shlex.quote(pkg)}"
         else:
-            return f"sudo pacman -Rns --noconfirm {shlex.quote(pkg)}"
+            return f"sudo pacman -Rns {shlex.quote(pkg)}"
 
     def _do_uninstall(self):
         cmd = self._get_current_uninstall_command()
@@ -785,7 +790,9 @@ class StoreView(QWidget):
     def __init__(self, parent: QWidget = None):
         super().__init__(parent)
         self.services = ServiceRegistry.get()
-        self.installed_sources = self.services.packages.get_installed_sources(refresh=True)
+        self.installed_sources = {"arch": set(), "flatpak": set()}
+        self.status_loaded = False
+        self._status_refresh_worker = None
         self.view_mode = self.services.settings.get("store_view_mode", "grid") # "grid" or "list"
         self.cards = []
 
@@ -804,7 +811,7 @@ class StoreView(QWidget):
         layout.addLayout(header)
 
         # Search and Category Filters Bar
-        filter_card = SharpCard("Discover & Filter Software", "Curated selection of essential Linux apps, workaround tools, and game runners")
+        filter_card = SharpCard("Browse Apps", "A selected set of desktop apps, system tools, and game launchers")
         f_layout = QVBoxLayout()
         f_layout.setSpacing(10)
 
@@ -862,6 +869,7 @@ class StoreView(QWidget):
 
         self.scroll.setWidget(self.container)
         layout.addWidget(self.scroll)
+        QTimer.singleShot(0, self._refresh_all_cards)
 
     def apply_theme_style(self, theme_key: str = None):
         if not theme_key:
@@ -907,6 +915,7 @@ class StoreView(QWidget):
 
             for app in CURATED_APPS:
                 card = AppGridCard(app, self.installed_sources)
+                card.action_btn.setEnabled(self.status_loaded)
                 card.clicked.connect(self._open_install_popup)
                 self.cards.append(card)
 
@@ -914,6 +923,7 @@ class StoreView(QWidget):
         else: # List view
             for app in CURATED_APPS:
                 card = AppBannerCard(app, self.installed_sources)
+                card.action_btn.setEnabled(self.status_loaded)
                 card.clicked.connect(self._open_install_popup)
                 self.cards.append(card)
                 self.c_layout.addWidget(card)
@@ -922,6 +932,8 @@ class StoreView(QWidget):
         self._filter_apps()
 
     def _open_install_popup(self, app_data: dict, is_installed: bool):
+        if not self.status_loaded:
+            return
         dialog = AppInstallDialog(app_data, is_installed, parent=self)
         dialog.exec()
         # Refresh card status immediately after dialog closes (no delay needed)
@@ -962,7 +974,28 @@ class StoreView(QWidget):
         self._on_category_clicked(key)
 
     def _refresh_all_cards(self):
-        self.installed_sources = self.services.packages.get_installed_sources(refresh=True)
+        if self._status_refresh_worker and self._status_refresh_worker.isRunning():
+            return
+        self.refresh_btn.setEnabled(False)
+        self._status_refresh_worker = TaskWorker(
+            lambda: self.services.packages.get_installed_sources(refresh=True),
+            self,
+        )
+        self._status_refresh_worker.result_ready.connect(self._display_installed_sources)
+        self._status_refresh_worker.failed.connect(self._installed_sources_failed)
+        self._status_refresh_worker.start()
+
+    def _display_installed_sources(self, installed_sources):
+        self._status_refresh_worker = None
+        self.refresh_btn.setEnabled(True)
+        self.installed_sources = installed_sources
+        self.status_loaded = True
         for card in self.cards:
             card.installed_sources = self.installed_sources
             card.refresh_status()
+            card.action_btn.setEnabled(True)
+
+    def _installed_sources_failed(self, message: str):
+        self._status_refresh_worker = None
+        self.refresh_btn.setEnabled(True)
+        self.services.runner.log(f"Could not read installed applications: {message}")

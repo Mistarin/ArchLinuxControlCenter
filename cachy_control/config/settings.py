@@ -5,6 +5,8 @@ Handles persistent user configurations, recent project directories, and tool pre
 
 import json
 import os
+import copy
+import tempfile
 from pathlib import Path
 from typing import List, Dict, Any
 
@@ -31,21 +33,37 @@ class SettingsManager:
 
     def load(self) -> None:
         if not self.config_path.exists():
-            self._data = DEFAULT_SETTINGS.copy()
+            self._data = copy.deepcopy(DEFAULT_SETTINGS)
             self.save()
             return
         
         try:
             with open(self.config_path, "r", encoding="utf-8") as f:
-                self._data = {**DEFAULT_SETTINGS, **json.load(f)}
+                self._data = {**copy.deepcopy(DEFAULT_SETTINGS), **json.load(f)}
         except Exception:
-            self._data = DEFAULT_SETTINGS.copy()
+            self._data = copy.deepcopy(DEFAULT_SETTINGS)
 
     def save(self) -> None:
         try:
             self.config_path.parent.mkdir(parents=True, exist_ok=True)
-            with open(self.config_path, "w", encoding="utf-8") as f:
-                json.dump(self._data, f, indent=2)
+            fd, temp_path = tempfile.mkstemp(prefix=".config-", dir=self.config_path.parent)
+            try:
+                os.fchmod(fd, 0o600)
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
+                    json.dump(self._data, f, indent=2)
+                    f.flush()
+                    os.fsync(f.fileno())
+                os.replace(temp_path, self.config_path)
+            except Exception:
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
+                try:
+                    os.unlink(temp_path)
+                except OSError:
+                    pass
+                raise
         except Exception as e:
             print(f"[SettingsManager] Failed to save config: {e}")
 
@@ -58,7 +76,7 @@ class SettingsManager:
 
     def add_recent_project(self, path: str) -> None:
         path_str = str(Path(path).expanduser().resolve())
-        projects: List[str] = self._data.get("recent_projects", [])
+        projects: List[str] = list(self._data.get("recent_projects", []))
         if path_str in projects:
             projects.remove(path_str)
         projects.insert(0, path_str)
